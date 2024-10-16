@@ -3,3 +3,4 @@ matplotlib==3.9.1
 matplotlib-inline==0.1.7
 seaborn==0.12.2
 statsmodels==0.14.0
+plotly==5.13.1
