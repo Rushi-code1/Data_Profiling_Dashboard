@@ -2,294 +2,324 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
 from scipy import stats
-from sklearn.cluster import KMeans
-from fpdf import FPDF
-import os
-import streamlit as st
+import missingno as msno
 
-def load_data(file_path):
-    """
-    Load dataset from various file formats and convert to pandas DataFrame.
-    """
-    try:
-        # Get the file extension from the uploaded file's name
-        file_extension = uploaded_file.name.split('.')[-1].lower()
-
-        if file_extension == 'csv':
-            return pd.read_csv(uploaded_file)
-        elif file_extension in ['xls', 'xlsx']:
-            return pd.read_excel(uploaded_file)
-        elif file_extension == 'json':
-            return pd.read_json(uploaded_file)
-        elif file_extension == 'txt':
-            return pd.read_csv(uploaded_file, delimiter="\t")
+class EDAProcessor:
+    def __init__(self, data: pd.DataFrame, target_col: str = None):
+        if not isinstance(data, pd.DataFrame):
+            raise ValueError("Input data must be a pandas DataFrame")
+        
+        self.df = data
+        self.target = target_col
+        
+        if self.target:
+            if self.target not in self.df.columns:
+                raise ValueError(f"Target column '{self.target}' not found in the DataFrame.")
+            print(f"Target column set to: {self.target}")
         else:
-            raise ValueError("Unsupported file format! Please provide a CSV, Excel, JSON, or TXT file.")
-    except Exception as e:
-        st.error(f"Error loading file: {e}")
-        return None
-
-def data_understanding(df):
-    """
-    Perform basic understanding of the dataset.
-    """
-    st.subheader("Data Understanding")
-    st.write(f"Shape of dataset: {df.shape[0]} rows, {df.shape[1]} columns")
-    st.write("\nColumn Data Types:")
-    st.write(df.dtypes)
-    st.write("\nDataset Preview (First 5 Rows):")
-    st.write(df.head())
-    
-    st.write("\nDataset Statistics (Numerical Columns):")
-    st.write(df.describe())
-
-def handle_missing_values(df):
-    """
-    Handle missing values by imputing with median for numeric columns and mode for categorical columns.
-    """
-    st.subheader("Handling Missing Values")
-    numeric_cols = df.select_dtypes(include=['number']).columns
-    categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-    
-    # Handle missing values for numeric columns (impute with median)
-    for col in numeric_cols:
-        median_value = df[col].median()
-        df[col].fillna(median_value, inplace=True)
-        st.write(f"Imputed missing values in numeric column '{col}' with median: {median_value}")
-    
-    # Handle missing values for categorical columns (impute with mode)
-    for col in categorical_cols:
-        mode_value = df[col].mode()[0]
-        df[col].fillna(mode_value, inplace=True)
-        st.write(f"Imputed missing values in categorical column '{col}' with mode: {mode_value}")
-    
-    return df
-
-def remove_duplicates(df):
-    """
-    Remove duplicate rows from the dataframe.
-    """
-    initial_shape = df.shape[0]
-    df.drop_duplicates(inplace=True)
-    removed_rows = initial_shape - df.shape[0]
-    st.write(f"\nRemoved {removed_rows} duplicate rows.")
-    return df
-
-def detect_outliers(df):
-    """
-    Detect outliers using the IQR method. Outliers are values outside the range of Q1 - 1.5 * IQR and Q3 + 1.5 * IQR.
-    """
-    st.subheader("Outlier Detection (Using IQR Method)")
-    outlier_info = {}
-    numeric_cols = df.select_dtypes(include=['number']).columns
-    for col in numeric_cols:
-        Q1 = df[col].quantile(0.25)
-        Q3 = df[col].quantile(0.75)
-        IQR = Q3 - Q1
-        lower_bound = Q1 - 1.5 * IQR
-        upper_bound = Q3 + 1.5 * IQR
-        outliers = df[(df[col] < lower_bound) | (df[col] > upper_bound)]
-        if outliers.shape[0] > 0:
-            outlier_info[col] = outliers
-            st.write(f"Outliers detected in column '{col}': {outliers.shape[0]} rows")
-        else:
-            st.write(f"No outliers detected in column '{col}'.")
-    
-    return outlier_info
-
-def univariate_analysis(df):
-    """
-    Perform univariate analysis to visualize the distribution of variables.
-    """
-    st.subheader("Univariate Analysis")
-    # Numerical feature distributions (Histograms and Boxplots)
-    numeric_cols = df.select_dtypes(include=['number']).columns
-    for col in numeric_cols:
-        fig, axes = plt.subplots(1, 2, figsize=(12, 6))
-
-        # Plot histogram
-        axes[0].hist(df[col], bins=30, color='lightblue', edgecolor='black')
-        axes[0].set_title(f'{col} - Histogram')
+            print("No target column specified.")
         
-        # Plot boxplot
-        sns.boxplot(x=df[col], color='lightgreen', ax=axes[1])
-        axes[1].set_title(f'{col} - Boxplot')
-        
-        st.pyplot(fig)
+    def data_info(self):
+        """Displays basic information about the dataframe: shape, column types, and memory usage."""
+        try:
+            print(f"Shape of the data: {self.df.shape}")
+            print(f"Columns and data types:\n{self.df.dtypes}")
+            print(f"Memory usage: {self.df.memory_usage(deep=True)}")
+            return self.df.info()
+        except Exception as e:
+            print(f"Error in data_info: {e}")
     
-    # Categorical feature distributions (Bar plots)
-    categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-    for col in categorical_cols:
-        fig, ax = plt.subplots(figsize=(10, 5))
-        sns.countplot(x=df[col], palette='Set2', ax=ax)
-        ax.set_title(f'{col} - Count Plot')
-        ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
-        st.pyplot(fig)
-
-def bivariate_analysis(df):
-    """
-    Perform bivariate analysis to explore relationships between two variables.
-    """
-    st.subheader("Bivariate Analysis")
-    numeric_cols = df.select_dtypes(include=['number']).columns
-    if len(numeric_cols) > 1:
-        # Correlation heatmap
-        fig, ax = plt.subplots(figsize=(10, 8))
-        correlation_matrix = df[numeric_cols].corr()
-        sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5, ax=ax)
-        ax.set_title("Correlation Heatmap")
-        st.pyplot(fig)
-
-        # Scatter plots for pairwise numeric relationships
-        pairplot_fig = sns.pairplot(df[numeric_cols])
-        st.pyplot(pairplot_fig)
+    def clean_data(self):
+        """Cleans the data by removing rows with missing values and duplicates."""
+        try:
+            print("Cleaning data...")
+            self.df = self.df.dropna()
+            self.df = self.df.drop_duplicates()
+            print("Data cleaned successfully.")
+            return self.df
+        except Exception as e:
+            print(f"Error in clean_data: {e}")
     
-    # Grouped bar plots for categorical vs. numeric relationships
-    categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-    for cat_col in categorical_cols:
-        for num_col in numeric_cols:
-            fig, ax = plt.subplots(figsize=(10, 5))
-            sns.barplot(x=cat_col, y=num_col, data=df, palette='Set1', ax=ax)
-            ax.set_title(f'{cat_col} vs {num_col} - Grouped Bar Plot')
-            ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
-            st.pyplot(fig)
+    def summary_statistics(self, columns=None):
+        """Displays summary statistics for selected columns or the entire dataframe."""
+        try:
+            if columns is not None:
+                # Validate if all columns exist in the DataFrame
+                missing_cols = [col for col in columns if col not in self.df.columns]
+                if missing_cols:
+                    raise ValueError(f"The following columns are not in the DataFrame: {missing_cols}")
+                data_to_describe = self.df[columns]
+            else:
+                data_to_describe = self.df
+            
+            print(f"Numerical summary:\n{data_to_describe.describe()}")
+            print(f"Categorical summary:\n{data_to_describe.describe(include=['object'])}")
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in summary_statistics: {e}")
 
-def multivariate_analysis(df):
-    """
-    Perform multivariate analysis to explore relationships among multiple variables.
-    """
-    st.subheader("Multivariate Analysis")
+        
+    def correlation_matrix(self, columns=None):
+        """Displays a heatmap of the correlation matrix for numeric columns."""
+        try:
+            if columns is not None:
+                # Validate if all columns exist in the DataFrame
+                missing_cols = [col for col in columns if col not in self.df.columns]
+                if missing_cols:
+                    raise ValueError(f"The following columns are not in the DataFrame: {missing_cols}")
+                corr_data = self.df[columns].select_dtypes(include=[np.number])
+            else:
+                corr_data = self.df.select_dtypes(include=[np.number])
+            
+            if corr_data.empty:
+                raise ValueError("No numeric columns found to calculate correlation.")
+            
+            corr = corr_data.corr()
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f')
+            plt.title('Correlation Matrix')
+            plt.show()
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in correlation_matrix: {e}")
+            corr = corr_data.corr()
+            plt.figure(figsize=(10,8))
+            sns.heatmap(corr, annot=True, cmap='coolwarm', fmt='.2f')
+            plt.title('Correlation Matrix')
+            plt.show()
+        except Exception as e:
+                print(f"Error in correlation_matrix: {e}")
+        
+    def visualize_all_features(self, columns=None):
+        """Visualizes all selected features (univariate and bivariate)."""
+        try:
+            print("Visualizing all selected features...")
+            if columns is None:
+                columns = self.df.columns
+
+            continuous_columns = self.df[columns].select_dtypes(include=[np.number]).columns
+            categorical_columns = self.df[columns].select_dtypes(include=['object']).columns
+
+            for col in continuous_columns:
+                self.univariate_continuous(col)
+
+            for col in categorical_columns:
+                self.univariate_categorical(col)
+            
+            for col1 in continuous_columns:
+                for col2 in continuous_columns:
+                    if col1 != col2:
+                        self.bivariate_continuous(col1, col2)
+
+            for col1 in continuous_columns:
+                for col2 in categorical_columns:
+                    self.bivariate_continuous_categorical(col1, col2)
+                
+        except Exception as e:
+            print(f"Error in visualize_all_features: {e}")
+
+    def univariate_continuous(self, col):
+        """Visualizes distribution and boxplot for continuous columns."""
+        try:
+            if col not in self.df.columns:
+                raise ValueError(f"Column '{col}' not found in the DataFrame.")
+            
+            plt.figure(figsize=(12,6))
+            sns.histplot(self.df[col], kde=True)
+            plt.title(f'Distribution of {col}')
+            plt.show()
+            
+            plt.figure(figsize=(12,6))
+            sns.boxplot(x=self.df[col])
+            plt.title(f'Boxplot of {col}')
+            plt.show()
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in univariate_continuous: {e}")
+
+    def univariate_categorical(self, col):
+        """Visualizes countplot for categorical columns."""
+        try:
+            if col not in self.df.columns:
+                raise ValueError(f"Column '{col}' not found in the DataFrame.")
+            
+            plt.figure(figsize=(12,6))
+            sns.countplot(x=self.df[col])
+            plt.title(f'Countplot of {col}')
+            plt.show()
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in univariate_categorical: {e}")
+
+    def bivariate_continuous(self, col1, col2):
+        """Visualizes scatterplot between two continuous columns."""
+        try:
+            if col1 not in self.df.columns or col2 not in self.df.columns:
+                raise ValueError(f"Columns '{col1}' or '{col2}' not found in the DataFrame.")
+            
+            plt.figure(figsize=(12,6))
+            sns.scatterplot(x=self.df[col1], y=self.df[col2])
+            plt.title(f'Scatterplot between {col1} and {col2}')
+            plt.show()
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in bivariate_continuous: {e}")
+
+    def bivariate_continuous_categorical(self, cont_col, cat_col):
+        """Visualizes boxplot of continuous vs categorical columns."""
+        try:
+            if cont_col not in self.df.columns or cat_col not in self.df.columns:
+                raise ValueError(f"Columns '{cont_col}' or '{cat_col}' not found in the DataFrame.")
+            
+            plt.figure(figsize=(12,6))
+            sns.boxplot(x=self.df[cat_col], y=self.df[cont_col])
+            plt.title(f'{cont_col} by {cat_col}')
+            plt.show()
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in bivariate_continuous_categorical: {e}")
+
+    def missing_data_pattern(self):
+        """Visualizes the missing data pattern in the dataframe."""
+        try:
+            msno.matrix(self.df)
+            plt.show()
+        except Exception as e:
+            print(f"Error in missing_data_pattern: {e}")
+
+    def detect_outliers(self, columns=None):
+        """Detects outliers in the continuous columns."""
+        try:
+            # Use all numeric columns if no specific columns are provided
+            if columns is None:
+                numeric_columns = self.df.select_dtypes(include=[np.number]).columns
+            else:
+                # Validate if specified columns exist
+                missing_cols = [col for col in columns if col not in self.df.columns]
+                if missing_cols:
+                    raise ValueError(f"The following columns are not in the DataFrame: {missing_cols}")
+                
+                # Filter numeric columns from the specified list
+                numeric_columns = [col for col in columns if col in self.df.select_dtypes(include=[np.number]).columns]
+            
+            if not numeric_columns:
+                raise ValueError("No numeric columns found for outlier detection.")
+            
+            # Detect outliers for each numeric column
+            for col in numeric_columns:
+                z_scores = np.abs(stats.zscore(self.df[col]))
+                outliers = self.df[col][z_scores > 3]
+                print(f"Outliers detected in {col}:\n{outliers}")
+                return outliers
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in detect_outliers: {e}")
+
+
+    def scale_features(self, columns=None, method='standard'):
+        """Scales features using StandardScaler or MinMaxScaler."""
+        try:
+            if columns is None:
+                # Select all numeric columns by default
+                numeric_columns = self.df.select_dtypes(include=[np.number]).columns
+            else:
+                # Validate if all specified columns exist
+                missing_cols = [col for col in columns if col not in self.df.columns]
+                if missing_cols:
+                    raise ValueError(f"The following columns are not in the DataFrame: {missing_cols}")
+                
+                # Filter only numeric columns
+                numeric_columns = [col for col in columns if col in self.df.select_dtypes(include=[np.number]).columns]
+
+            if not numeric_columns:
+                raise ValueError("No numeric columns found to scale.")
+            
+            if method == 'standard':
+                scaler = StandardScaler()
+            elif method == 'minmax':
+                scaler = MinMaxScaler()
+            else:
+                raise ValueError("Method must be either 'standard' or 'minmax'.")
+            
+            # Scale only the numeric columns
+            self.df[numeric_columns] = scaler.fit_transform(self.df[numeric_columns])
+            print(f"Features {numeric_columns} scaled using {method} scaling.")
+            return self.df
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in scale_features: {e}")
+
     
-    # Pair plots for multiple numerical columns
-    numeric_cols = df.select_dtypes(include=['number']).columns
-    if len(numeric_cols) > 1:
-        pairplot_fig = sns.pairplot(df[numeric_cols], hue=numeric_cols[0], palette='coolwarm')
-        st.pyplot(pairplot_fig)
+    def feature_importance(self, target_col):
+        """Displays feature importance using Random Forest."""
+        try:
+            if target_col not in self.df.columns:
+                raise ValueError(f"Target column '{target_col}' not found.")
+            X = self.df.drop(columns=[target_col,"Date"])
+            y = self.df[target_col]
+            
+            if y.nunique() > 10:  # Continuous target (regression)
+                model = RandomForestRegressor()
+            else:  # Categorical target (classification)
+                model = RandomForestClassifier()
 
-    # Box plots grouped by categorical variables
-    categorical_cols = df.select_dtypes(include=['object', 'category']).columns
-    for cat_col in categorical_cols:
-        for num_col in numeric_cols:
-            fig, ax = plt.subplots(figsize=(10, 6))
-            sns.boxplot(x=cat_col, y=num_col, data=df, palette='Set1', ax=ax)
-            ax.set_title(f'{cat_col} vs {num_col} - Box Plot')
-            ax.set_xticklabels(ax.get_xticklabels(), rotation=45)
-            st.pyplot(fig)
+            model.fit(X, y)
+            importance = model.feature_importances_
+            feature_imp = pd.Series(importance, index=X.columns).sort_values(ascending=False)
+            print(f"Feature importance:\n{feature_imp}")
+            return feature_imp
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in feature_importance: {e}")
+            
+            
+    def encode_categorical(self, columns=None, encoding_type='label'):
+        """Encodes categorical variables into numeric."""
+        try:
+            if columns is None:
+                # Select all categorical columns by default
+                cat_columns = self.df.select_dtypes(include=['object']).columns.tolist()
+            else:
+                # Validate if all specified columns exist in the DataFrame
+                missing_cols = [col for col in columns if col not in self.df.columns]
+                if missing_cols:
+                    raise ValueError(f"The following columns are not in the DataFrame: {missing_cols}")
+                
+                # Filter only categorical columns from the specified list
+                cat_columns = [col for col in columns if col in self.df.select_dtypes(include=['object']).columns]
 
-    # Cluster Visualization (KMeans)
-    if len(numeric_cols) >= 2:
-        st.write("\nPerforming KMeans Clustering (2 clusters)")
-        kmeans = KMeans(n_clusters=2, random_state=42)
-        df['Cluster'] = kmeans.fit_predict(df[numeric_cols].dropna())
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.scatterplot(x=df[numeric_cols[0]], y=df[numeric_cols[1]], hue='Cluster', data=df, palette='Set2', ax=ax)
-        ax.set_title("Cluster Visualization using KMeans")
-        st.pyplot(fig)
+            if not cat_columns:  # Check if the list is empty
+                print("No categorical columns found for encoding.")
+                return self.df
+            
+            if encoding_type == 'label':
+                # Label encoding
+                for col in cat_columns:
+                    le = LabelEncoder()
+                    self.df[col] = le.fit_transform(self.df[col])
+                    print(f"Column '{col}' encoded using Label Encoding.")
+            elif encoding_type == 'onehot':
+                # One-hot encoding
+                self.df = pd.get_dummies(self.df, columns=cat_columns, drop_first=True)
+                print(f"Columns {cat_columns} encoded using One-Hot Encoding.")
+            else:
+                raise ValueError("Unsupported encoding_type. Use 'label' or 'onehot'.")
 
-def generate_report(df, outliers, file_name="eda_report.pdf"):
-    """
-    Generate a PDF report with insights from the analysis, including visualizations.
-    """
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=12)
-
-    # Title
-    pdf.cell(200, 10, txt="Exploratory Data Analysis Report", ln=True, align="C")
-    pdf.ln(10)
-
-    # Dataset Overview
-    pdf.cell(200, 10, txt="1. Dataset Overview", ln=True)
-    pdf.multi_cell(0, 10, f"Shape: {df.shape[0]} rows, {df.shape[1]} columns\n")
-    pdf.multi_cell(0, 10, "Columns:\n" + str(df.columns.tolist()) + "\n")
-    pdf.multi_cell(0, 10, "Basic Statistics:\n")
-    pdf.multi_cell(0, 10, str(df.describe().to_string()) + "\n")
-
-    # Outlier Information
-    pdf.ln(10)
-    pdf.cell(200, 10, txt="2. Outlier Detection", ln=True)
-    for col, outlier_data in outliers.items():
-        pdf.multi_cell(0, 10, f"Outliers detected in column '{col}' with {outlier_data.shape[0]} rows.\n")
-
-    # Visualizations (save the figures temporarily and include in the report)
-    pdf.ln(10)
-    pdf.cell(200, 10, txt="3. Visualizations", ln=True)
-
-    # Univariate Analysis Plots (Save and include images)
-    numeric_cols = df.select_dtypes(include=['number']).columns
-    for col in numeric_cols:
-        # Plot Histogram and Boxplot
-        plt.figure(figsize=(12, 6))
-        plt.subplot(1, 2, 1)
-        df[col].hist(bins=30, color='lightblue', edgecolor='black')
-        plt.title(f'{col} - Histogram')
-
-        plt.subplot(1, 2, 2)
-        sns.boxplot(x=df[col], color='lightgreen')
-        plt.title(f'{col} - Boxplot')
-
-        plt.tight_layout()
-        img_path = f"hist_box_{col}.png"
-        plt.savefig(img_path)
-        plt.close()
-
-        # Add the image to PDF
-        pdf.ln(5)
-        pdf.cell(200, 10, txt=f"{col} - Histogram and Boxplot", ln=True)
-        pdf.image(img_path, x=10, w=180)
-        os.remove(img_path)  # Delete the image file after adding it to the PDF
-
-    # Bivariate Analysis (Add scatter plot, correlation heatmap)
-    if len(numeric_cols) > 1:
-        plt.figure(figsize=(10, 8))
-        correlation_matrix = df[numeric_cols].corr()
-        sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', fmt='.2f', linewidths=0.5)
-        plt.title("Correlation Heatmap")
-        heatmap_path = "correlation_heatmap.png"
-        plt.savefig(heatmap_path)
-        plt.close()
-
-        pdf.ln(5)
-        pdf.cell(200, 10, txt="Correlation Heatmap", ln=True)
-        pdf.image(heatmap_path, x=10, w=180)
-        os.remove(heatmap_path)
-
-    # Conclusion and Suggestions
-    pdf.ln(10)
-    pdf.cell(200, 10, txt="4. Conclusion and Suggestions", ln=True)
-    pdf.multi_cell(0, 10, "Suggestions for Next Steps:\n - Feature Engineering\n - Handle Outliers\n - Perform Model Building\n")
-
-    # Output the report
-    pdf.output(file_name)
-    st.write(f"\nPDF report generated: {file_name}")
-
-# Streamlit interface
-st.title("Exploratory Data Analysis (EDA)")
-
-uploaded_file = st.file_uploader("Upload a Dataset", type=["csv", "xls", "xlsx", "json", "txt"])
-
-if uploaded_file is not None:
-    df = load_data(uploaded_file)
-    
-    if df is not None:
-        # Data Understanding
-        data_understanding(df)
-        
-        # Data Cleaning
-        df = handle_missing_values(df)
-        df = remove_duplicates(df)
-        
-        # Outlier Detection
-        outliers = detect_outliers(df)
-        
-        # Univariate and Bivariate Analysis
-        univariate_analysis(df)
-        bivariate_analysis(df)
-        
-        # Multivariate Analysis
-        multivariate_analysis(df)
-        
-        # Generate PDF Report
-        if st.button("Generate PDF Report"):
-            generate_report(df, outliers)
+            return self.df
+        except ValueError as ve:
+            print(f"ValueError: {ve}")
+        except Exception as e:
+            print(f"Error in encode_categorical: {e}")
